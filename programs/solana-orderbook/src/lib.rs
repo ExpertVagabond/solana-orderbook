@@ -14,6 +14,14 @@ pub mod solana_orderbook {
         market.quote_mint = ctx.accounts.quote_mint.key();
         market.order_count = 0;
         market.bump = ctx.bumps.market;
+
+        emit!(MarketInitialized {
+            market: market.key(),
+            authority: ctx.accounts.authority.key(),
+            base_mint: ctx.accounts.base_mint.key(),
+            quote_mint: ctx.accounts.quote_mint.key(),
+        });
+
         Ok(())
     }
 
@@ -48,6 +56,17 @@ pub mod solana_orderbook {
         order.filled = 0;
         order.timestamp = Clock::get()?.unix_timestamp;
         order.bump = ctx.bumps.order;
+
+        emit!(OrderPlaced {
+            market: market.key(),
+            order: order.key(),
+            owner: ctx.accounts.owner.key(),
+            side,
+            price,
+            quantity,
+            order_id,
+        });
+
         Ok(())
     }
 
@@ -111,6 +130,15 @@ pub mod solana_orderbook {
         }
 
         order.filled = order.filled.checked_add(fill_qty).ok_or(OrderbookError::Overflow)?;
+
+        let new_remaining = order.quantity.checked_sub(order.filled).ok_or(OrderbookError::Overflow)?;
+        emit!(OrderFilled {
+            order: order.key(),
+            taker: ctx.accounts.taker.key(),
+            fill_qty,
+            remaining: new_remaining,
+        });
+
         Ok(())
     }
 
@@ -140,6 +168,13 @@ pub mod solana_orderbook {
             },
             &[seeds],
         ), refund)?;
+
+        emit!(OrderCancelled {
+            order: ctx.accounts.order.key(),
+            owner: ctx.accounts.owner.key(),
+            refund,
+        });
+
         Ok(())
     }
 }
@@ -246,4 +281,42 @@ pub enum OrderbookError {
     AlreadyFilled,
     #[msg("Overflow")]
     Overflow,
+}
+
+// ---------------------------------------------------------------------------
+// Events
+// ---------------------------------------------------------------------------
+
+#[event]
+pub struct MarketInitialized {
+    pub market: Pubkey,
+    pub authority: Pubkey,
+    pub base_mint: Pubkey,
+    pub quote_mint: Pubkey,
+}
+
+#[event]
+pub struct OrderPlaced {
+    pub market: Pubkey,
+    pub order: Pubkey,
+    pub owner: Pubkey,
+    pub side: Side,
+    pub price: u64,
+    pub quantity: u64,
+    pub order_id: u64,
+}
+
+#[event]
+pub struct OrderFilled {
+    pub order: Pubkey,
+    pub taker: Pubkey,
+    pub fill_qty: u64,
+    pub remaining: u64,
+}
+
+#[event]
+pub struct OrderCancelled {
+    pub order: Pubkey,
+    pub owner: Pubkey,
+    pub refund: u64,
 }
