@@ -1,5 +1,5 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount, Transfer};
+use anchor_spl::token_interface::{Mint, TokenInterface, TokenAccount, TransferChecked, transfer_checked};
 
 declare_id!("HQNvupbQewUWSAS6WAxBakxhmKgF6YAXLpiXdSsQHq9K");
 
@@ -33,14 +33,15 @@ pub mod solana_orderbook {
             Side::Ask => quantity,
         };
 
-        token::transfer(CpiContext::new(
+        transfer_checked(CpiContext::new(
             ctx.accounts.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
                 from: ctx.accounts.user_token_account.to_account_info(),
                 to: ctx.accounts.vault.to_account_info(),
                 authority: ctx.accounts.owner.to_account_info(),
+                mint: ctx.accounts.deposit_mint.to_account_info(),
             },
-        ), deposit)?;
+        ), deposit, ctx.accounts.deposit_mint.decimals)?;
 
         let market = &mut ctx.accounts.market;
         let order_id = market.order_count;
@@ -85,47 +86,51 @@ pub mod solana_orderbook {
         match order.side {
             Side::Bid => {
                 // Taker sends base tokens to order owner
-                token::transfer(CpiContext::new(
+                transfer_checked(CpiContext::new(
                     ctx.accounts.token_program.to_account_info(),
-                    Transfer {
+                    TransferChecked {
                         from: ctx.accounts.taker_base.to_account_info(),
                         to: ctx.accounts.maker_base.to_account_info(),
                         authority: ctx.accounts.taker.to_account_info(),
+                        mint: ctx.accounts.base_mint.to_account_info(),
                     },
-                ), fill_qty)?;
+                ), fill_qty, ctx.accounts.base_mint.decimals)?;
                 // Vault releases quote tokens to taker
                 let quote_amount = order.price.checked_mul(fill_qty).ok_or(OrderbookError::Overflow)?;
-                token::transfer(CpiContext::new_with_signer(
+                transfer_checked(CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
-                    Transfer {
+                    TransferChecked {
                         from: ctx.accounts.vault.to_account_info(),
                         to: ctx.accounts.taker_quote.to_account_info(),
                         authority: ctx.accounts.market.to_account_info(),
+                        mint: ctx.accounts.quote_mint.to_account_info(),
                     },
                     &[seeds],
-                ), quote_amount)?;
+                ), quote_amount, ctx.accounts.quote_mint.decimals)?;
             }
             Side::Ask => {
                 // Taker sends quote tokens to order owner
                 let quote_amount = order.price.checked_mul(fill_qty).ok_or(OrderbookError::Overflow)?;
-                token::transfer(CpiContext::new(
+                transfer_checked(CpiContext::new(
                     ctx.accounts.token_program.to_account_info(),
-                    Transfer {
+                    TransferChecked {
                         from: ctx.accounts.taker_quote.to_account_info(),
                         to: ctx.accounts.maker_quote.to_account_info(),
                         authority: ctx.accounts.taker.to_account_info(),
+                        mint: ctx.accounts.quote_mint.to_account_info(),
                     },
-                ), quote_amount)?;
+                ), quote_amount, ctx.accounts.quote_mint.decimals)?;
                 // Vault releases base tokens to taker
-                token::transfer(CpiContext::new_with_signer(
+                transfer_checked(CpiContext::new_with_signer(
                     ctx.accounts.token_program.to_account_info(),
-                    Transfer {
+                    TransferChecked {
                         from: ctx.accounts.vault.to_account_info(),
                         to: ctx.accounts.taker_base.to_account_info(),
                         authority: ctx.accounts.market.to_account_info(),
+                        mint: ctx.accounts.base_mint.to_account_info(),
                     },
                     &[seeds],
-                ), fill_qty)?;
+                ), fill_qty, ctx.accounts.base_mint.decimals)?;
             }
         }
 
@@ -159,15 +164,16 @@ pub mod solana_orderbook {
             Side::Ask => remaining,
         };
 
-        token::transfer(CpiContext::new_with_signer(
+        transfer_checked(CpiContext::new_with_signer(
             ctx.accounts.token_program.to_account_info(),
-            Transfer {
+            TransferChecked {
                 from: ctx.accounts.vault.to_account_info(),
                 to: ctx.accounts.owner_token_account.to_account_info(),
                 authority: ctx.accounts.market.to_account_info(),
+                mint: ctx.accounts.refund_mint.to_account_info(),
             },
             &[seeds],
-        ), refund)?;
+        ), refund, ctx.accounts.refund_mint.decimals)?;
 
         emit!(OrderCancelled {
             order: ctx.accounts.order.key(),
@@ -183,8 +189,8 @@ pub mod solana_orderbook {
 pub struct InitializeMarket<'info> {
     #[account(mut)]
     pub authority: Signer<'info>,
-    pub base_mint: Account<'info, Mint>,
-    pub quote_mint: Account<'info, Mint>,
+    pub base_mint: InterfaceAccount<'info, Mint>,
+    pub quote_mint: InterfaceAccount<'info, Mint>,
     #[account(init, payer = authority, space = 8 + Market::INIT_SPACE,
         seeds = [b"market", authority.key().as_ref(), base_mint.key().as_ref(), quote_mint.key().as_ref()], bump)]
     pub market: Account<'info, Market>,
@@ -200,11 +206,13 @@ pub struct PlaceOrder<'info> {
     #[account(init, payer = owner, space = 8 + Order::INIT_SPACE,
         seeds = [b"order", market.key().as_ref(), &market.order_count.to_le_bytes()], bump)]
     pub order: Account<'info, Order>,
+    /// The mint of the token being deposited (quote for bids, base for asks).
+    pub deposit_mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
-    pub user_token_account: Account<'info, TokenAccount>,
+    pub user_token_account: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
-    pub vault: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
     pub system_program: Program<'info, System>,
 }
 
@@ -215,17 +223,21 @@ pub struct FillOrder<'info> {
     pub market: Account<'info, Market>,
     #[account(mut, has_one = market)]
     pub order: Account<'info, Order>,
+    /// The base token mint.
+    pub base_mint: InterfaceAccount<'info, Mint>,
+    /// The quote token mint.
+    pub quote_mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
-    pub vault: Account<'info, TokenAccount>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
-    pub taker_base: Account<'info, TokenAccount>,
+    pub taker_base: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
-    pub taker_quote: Account<'info, TokenAccount>,
+    pub taker_quote: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
-    pub maker_base: Account<'info, TokenAccount>,
+    pub maker_base: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
-    pub maker_quote: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub maker_quote: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[derive(Accounts)]
@@ -234,11 +246,13 @@ pub struct CancelOrder<'info> {
     pub market: Account<'info, Market>,
     #[account(mut, has_one = market, has_one = owner, close = owner)]
     pub order: Account<'info, Order>,
+    /// The mint of the token being refunded (quote for bids, base for asks).
+    pub refund_mint: InterfaceAccount<'info, Mint>,
     #[account(mut)]
-    pub vault: Account<'info, TokenAccount>,
+    pub vault: InterfaceAccount<'info, TokenAccount>,
     #[account(mut)]
-    pub owner_token_account: Account<'info, TokenAccount>,
-    pub token_program: Program<'info, Token>,
+    pub owner_token_account: InterfaceAccount<'info, TokenAccount>,
+    pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[account]
