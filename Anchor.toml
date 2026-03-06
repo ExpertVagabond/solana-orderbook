@@ -5,6 +5,9 @@ package_manager = "yarn"
 resolution = true
 skip-lint = false
 
+[programs.devnet]
+solana_orderbook = "HQNvupbQewUWSAS6WAxBakxhmKgF6YAXLpiXdSsQHq9K"
+
 [programs.localnet]
 solana_orderbook = "41q8aXfcpqREjcFRK276KzBRRXWvmfYGqCDHZQ4CPwnX"
 
@@ -12,7 +15,7 @@ solana_orderbook = "41q8aXfcpqREjcFRK276KzBRRXWvmfYGqCDHZQ4CPwnX"
 url = "https://api.apr.dev"
 
 [provider]
-cluster = "localnet"
+cluster = "devnet"
 wallet = "~/.config/solana/id.json"
 
 [scripts]
